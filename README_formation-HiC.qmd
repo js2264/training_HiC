@@ -1,0 +1,929 @@
+---
+title: "Hi-C processing 101"
+date: "2023-01-25"
+author: Jacques SERIZAY
+format:
+    html:
+        theme: [cosmo, theme-cosmo.scss]
+        highlight: tango
+        toc: true
+        toc-depth: 3
+        number-sections: true
+        self-contained: true
+        embed-resources: true
+execute:
+  eval: false
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(
+    layout = 'l-page', 
+    eval = FALSE, echo = TRUE, 
+    warning = FALSE, error = FALSE, message = FALSE
+)
+```
+
+**Aim:** This workshop aims at learning from scratch how to process, check, visualize and integrate Hi-C data with other datasets. 
+
+More specifically, this will teach you: 
+
+* Set up a `conda` environment and install the required packages with `micromamba`
+* Align fastq files to a genome reference and generate a `.pairs` file with `hicstuff`
+* Understand the sanity checks performed by `hicstuff`
+* Bin filtered pairs into a contact matrix (`.cool`) using `cooler`
+* Generate a balanced, multi-resolution contact matrix file (`.mcool`) with `cooler`
+* Identify features (e.g. loops) using `chromosight`
+* Use R to perform advanced operations on contact matrices: 
+
+   - Import and subset contact matrices (`.cool`, `.hic`, `HiC-Pro` derived...)
+   - Import and subset pairs files
+   - Arithmetics: merge, divide, smoothen, balance, autocorrelate, ...
+   - Analysis: P(s), virtual 4C, scalograms, cis/trans interactions
+   - Mapping: chromatin loops (via `chromosight`), topological domains, compartments
+   - Visualizing: contact maps, features, aggregated maps, saddle plots
+
+* Integrate other genome-wide modalities (RNA-seq, ChIP-seq, ...)
+
+## Get sequencing reads data from `Rsg_reads` 
+
+### Download fastq files 
+
+First, you need to set up few environment variables. Let's start with the user: who are you? Start by creating a `USER` variable saving your Pasteur ID. 
+
+```{sh filename="bash"}
+USER=<...> ## e.g. USER=jaseriza
+```
+
+We will use library reads from: 
+
+::: {.callout-tip}
+## Libraries
+- `CH112` Hi-C library in a WT S288C background
+- `CH224` (input: `CH225`) Scc1 ChIP-seq library in a WT S288C background
+- `SRR2045244` RNA-seq library
+:::
+
+```{sh filename="bash"}
+# -------- Prepare project directoy 
+mkdir ~/formation_HiC    ## `mkdir` = create a folder
+cd ~/formation_HiC       ## `cd` = Change Directory
+mkdir data/              ## `mkdir` = create a folder
+
+# -------- Download fastq files from Rsg_reads (on sftpcampus)
+## `rsync` = Copy a file over `ssh` (equivalent of local `cp`)
+rsync --progress "${USER}"@sftpcampus.pasteur.fr:/pasteur/gaia/projets/p02/Rsg_reads/3_YEAST/collab_Beckouet_cohesin/CH112* data/
+rsync --progress "${USER}"@sftpcampus.pasteur.fr:/pasteur/gaia/projets/p02/Rsg_reads/3_YEAST/Mycoplasma/CH224* data/
+rsync --progress "${USER}"@sftpcampus.pasteur.fr:/pasteur/gaia/projets/p02/Rsg_reads/3_YEAST/Mycoplasma/CH225* data/
+
+# -------- Download fastq files from SRA (online)
+## `wget` = Download a file from internet
+wget ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR204/004/SRR2045244/SRR2045244_1.fastq.gz -O data/SRR2045244_R1.fastq.gz
+wget ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR204/004/SRR2045244/SRR2045244_2.fastq.gz -O data/SRR2045244_R2.fastq.gz
+
+# -------- Check data/ folder
+## `ls` = List files in a directory 
+ls .
+ls data/
+ls -l data/
+ls -ltFh data/
+```
+
+Let's have a look at the content of a compressed fastq file
+
+```{sh filename="bash"}
+## `zcat` = Uncompress and file and output its content in the terminal window
+## `|` = Pass the output of a command as the input of the next command
+zcat data/CH112_S4_R1_001.gz | head     ## `head` = Check the first 10 lines of a text file
+zcat data/CH112_S4_R2_001.gz | wc -l    ## `wc -l` = Count the number of lints in a text file
+```
+
+## Create a `conda` environment and install many required softwares for HiC & co.
+
+To process Hi-C reads, we need at least: 
+
+- An aligner (e.g. `bowtie2`)
+- An pairs processor (e.g. `hicstuff`)
+- An Hi-C contact matrix generator (e.g. `cooler`)
+
+To install these softwares, we will rely on a dedicated `conda` environment.
+Let's see how we can install `conda`, create en environment and install required packages. 
+
+```{sh filename="bash"}
+curl micro.mamba.pm/install.sh | bash
+#  ------------------------------ - ----
+# `curl ...`: Fetch a file from internet
+#                                `|`: ... and ...
+#                                  `bash`: Execute it
+```
+
+At this stage, you will have to restart a new terminal to continue the work. 
+Otherwise, you may encounters errors such as `command not found`.
+
+```{sh filename="bash"}
+micromamba --version
+micromamba config prepend channels bioconda
+micromamba config prepend channels conda-forge
+
+micromamba create -n HiC_micromamba \
+   'python>=3.7.12' \
+   'hicstuff>=3.1.5' 'chromosight>=1.6.3' \
+   'cooler>=0.9.1' 'cooltools>=0.5.1' \
+   'samtools>=1.7' 'bowtie2>=2.4.5' 'bedtools>=2.30.0' 'deeptools>=3.5.1' \
+   'matplotlib>=3.5.3' 'tree>=2.0.0'  
+#  ---------- ------ ------ --------------
+# `micromamba`: run micromamba main command
+#            `create`: Create a new conda environment ...
+#                   `-n HiC`: ... named "HiC" ...
+#                          `python=`: ... and pre-install `python` package in this "HiC" env.
+
+micromamba activate HiC_micromamba
+#  ----- -------- ---
+# `micromamba`: run micromamba main command
+#       `activate`: Activate an existing environment ...
+#                `HiC`: ... specifically the "HiC" env. we created
+   
+python --version
+command -V python
+
+hicstuff --version
+command -V hicstuff
+
+samtools --version
+cooler --version
+```
+
+::: {.callout-tip}
+## conda vs `anaconda` vs `miniconda` vs `mamba` vs `micromamba`
+All these softwares fit the same purpose: managing package installation in dedicated environments. 
+`conda` is the actual **package manager**, while `anaconda` or `miniconda` are 
+software distributions, i.e. a set of softwares, **including `conda`**. 
+`anaconda` includes 150+ scientific softwares whereas `microconda` has a much 
+tinier disk storage footprint. It includes `python` by default, but not much else. 
+`mamba` and `micromamba` are a newer flavour of `conda` and `miniconda`: they 
+can perform the same types of operations (create environment, install packages, ...)
+but much faster as it supports parallelized jobs!
+:::
+
+## Process Hi-C data with hicstuff
+
+### Preparing for `hicstuff` 
+
+Let's see what `hicstuff` documentation says: 
+
+```{sh filename="bash"}
+hicstuff --help
+hicstuff pipeline --help
+```
+
+If we want to run the entire hicstuff pipeline, we will need at least: 
+
+::: {.callout-tip}
+## Arguments
+- `--genome`=FILE 
+- `<input1>`
+- `<input2>`
+:::
+
+We have the data (`input1` and `input2`) as fastq files (check `data/` folder...), but we also need a `genome` index or in fasta sequence. We can get one from `Rsg/references_genomes/`.
+
+```{sh filename="bash"}
+## Download genome reference from sftpcampus
+mkdir -p genomes/S288c/
+rsync --progress "${USER}"@sftpcampus.pasteur.fr:/pasteur/gaia/entites/Rsg/reference_genomes/yeast/Saccharomyces_cerevisiae/S288C/S288c.fa genomes/S288c/
+rsync --progress "${USER}"@sftpcampus.pasteur.fr:/pasteur/gaia/entites/Rsg/reference_genomes/yeast/Saccharomyces_cerevisiae/S288C/S288c.gtf genomes/S288c/
+ls -l genomes/S288c/
+bowtie2-build genomes/S288c/S288c.fa genomes/S288c/S288c
+ls -l genomes/S288c/
+```
+
+### Running `hicstuff` 
+
+The generic command for hicstuff pipeline is something like: 
+
+```{sh}
+## GENERIC COMMAND: TO COMPLETE
+## DO NOT RUN THIS!
+hicstuff pipeline \
+   <some-options> \
+   --genome genomes/S288c/S288c.fa \ # Genome info
+   data/CH112_S4_R1_001.gz \ # read R1 info
+   data/CH112_S4_R2_001.gz   # read R2 info
+```
+
+::: {.callout-tip}
+## Options I find useful
+* --distance-law       Generates a distance law file and plot
+* --duplicates         Filter out PCR duplicates based on read positions.
+* --enzyme={STR|INT}   Restriction enzyme or "mnase"
+* --filter             Filter out spurious 3C events (loops and uncuts) using hicstuff filter (Cournac et al. BMC Genomics, 2012)
+* --mapping=STR        normal|iterative|cutsite mapping strategy
+* --matfmt=STR         The format of the output sparse matrix. Can be "bg2" for 2D Bedgraph format, "cool" for Mirnylab's cooler software, or "graal" for graal-compatible plain text COO format. [default: graal]
+* --no-cleanup         **Super important!!** Needed to keep intermediate pairs file
+* --outdir=DIR         Output directory
+* --plot               Generates informative QC plots in the output directory at different steps of the pipeline.
+* --prefix=STR         Overrides default filenames and prefixes all output files with a custom name.
+* --threads=INT        Number of threads to allocate.
+:::
+
+So, for me, a typical "extended" hicstuff pipeline command may look like this: 
+
+```{sh filename="bash"}
+hicstuff pipeline \
+   --distance-law \
+   --duplicates \
+   --enzyme DpnII,HinfI \
+   --filter \
+   --mapping normal \
+   --matfmt cool \
+   --no-cleanup \
+   --outdir results \
+   --plot \
+   --prefix CH112 \
+   --threads 12 \
+   --genome genomes/S288c/S288c.fa \
+   data/CH112_S4_R1_001.gz \
+   data/CH112_S4_R2_001.gz
+```
+
+::: {.callout-info}
+## Few notes on hicstuff pipeline
+- IMO, `--filter` is what makes `hicstuff` unique compared to other workflows. **DO USE IT!!**
+- `--matfmt cool` should be default in hicstuff. IMO, other formats are not as convenient, especially if you are going to map on larger genomes. 
+- With longer reads, I would typically run hicstuff in `--mapping iterative` mode to map as many reads as possible. 
+- If you are looking for maximum mappability and pairs number, `--mapping cutsite` will further increase these numbers. It will also exponentially increase computing time and disk storage, be warned. 
+- `enzyme` can take a bin size to directly bin aligned reads into fixed-width genomic windows, but filtering won't work. This is generally non-advised.  
+- I actually prefer to compute the P(s) (distance law) directly in R myself, from the `pairs` file. We'll see how to do that later. In this case, you can skip `--distance-law`, for larger datasets this step takes a significant amount of time to compute. 
+:::
+
+### Checking the output files 
+
+```{sh filename="bash"}
+tree results
+```
+
+::: {.callout-tip}
+## Output files
+results/  
+|-- CH112.chr.tsv  
+|-- CH112.cool  
+|-- CH112.distance_law.txt  
+|-- CH112.frags.tsv  
+|-- CH112.hicstuff_20230127153908.log  
+|-- plots/  
+|...|-- CH112_distance_law.pdf  
+|...|-- CH112_event_distance.pdf  
+|...|-- CH112_event_distribution.pdf  
+|...\`-- CH112_frags_hist.pdf   
+\`-- tmp/  
+....|-- CH112.for.bam  
+....|-- CH112.genome.fa.gz  
+....|-- CH112.genome.fa.gz.1.bt2  
+....|-- CH112.genome.fa.gz.2.bt2  
+....|-- CH112.genome.fa.gz.3.bt2  
+....|-- CH112.genome.fa.gz.4.bt2  
+....|-- CH112.genome.fa.gz.rev.1.bt2  
+....|-- CH112.genome.fa.gz.rev.2.bt2  
+....|-- CH112.rev.bam  
+....|-- CH112.valid.pairs  
+....|-- CH112.valid_idx.pairs  
+....|-- CH112.valid_idx_filtered.pairs  
+....`-- CH112.valid_idx_pcrfree.pairs  
+  
+2 directories, 22 files  
+:::
+
+We can check `hicstuff` log to make sure everything went smoothly: 
+
+```{sh filename="bash"}
+cat results/CH112.hicstuff_20230127153908.log
+```
+
+```{sh}
+## hicstuff: v3.1.5 log file
+## date: 2023-01-27 15:39:08
+## enzyme: DpnII,HinfI
+## input1: data/CH112_S4_R1_001.gz
+## input2: data/CH112_S4_R2_001.gz
+## ref: genomes/S288c/S288c.fa
+---
+2023-01-27,15:39:17 :: INFO :: bowtie2 index not found at results/tmp/CH112.genome.fa.gz, generating a local temporary index.
+2023-01-27,15:45:33 :: INFO :: 77% reads (single ends) mapped with Q >= 30 (36505851/47419366)
+2023-01-27,15:49:17 :: INFO :: Filtering with thresholds: uncuts=12 loops=14
+2023-01-27,15:50:12 :: INFO :: Proportion of inter contacts: 22.73% (intra: 9703399, inter: 2853784)
+2023-01-27,15:50:12 :: INFO :: 3252258 pairs discarded: Loops: 752085, Uncuts: 2489391, Weirds: 10782
+2023-01-27,15:50:12 :: INFO :: 12557183 pairs kept (79.43%)
+2023-01-27,15:54:28 :: INFO :: 35% PCR duplicates have been filtered out (4466833 / 12557183 pairs)
+2023-01-27,15:55:37 :: INFO :: Contact map generated after 0h 16m 29s
+```
+
+## Interact with a `.pairs` file
+
+### What is a `.pairs` file? 
+
+Each `contact` identified in Hi-C can be listed as a pair of 2 genomic locations.  
+For each pair of genomic loci making a contact, one comes from the `*_R1` fastq file and the other comes from the `*_R2` fastq file.  
+The `.pairs` format summarizes these contacts, and as such, **it is the main, most important output of a Hi-C experiment**. It is a human-readable, simplified version of a bam file generated from a paired-end sequencing. Information regarding sequencing/mapping quality, actual sequence, or other SAM flags, are discarded. The only remaining information are the genomic location of the end of each read. 
+
+The `.pairs` format has been formally defined as a tab-delimited text file containing 7 columns at least: 
+
+```{sh}
+<read_id> <chrom1> <pos1> <chrom2> <pos2> <strand1> <strand2>
+```
+
+|index|	name|	description|
+|-|--|------|
+|1|	read_id|	the ID of the read as defined in fastq files|
+|2|	chrom1|	the chromosome of the alignment on side 1|
+|3|	pos1|	the 1-based genomic position of the outer-most (5’) mapped bp on side 1|
+|4|	chrom2|	the chromosome of the alignment on side 2|
+|5|	pos2|	the 1-based genomic position of the outer-most (5’) mapped bp on side 2|
+|6|	strand1|	the strand of the alignment on side 1|
+|7|	strand2|	the strand of the alignment on side 2|
+
+A number of `.pairs` files are present in `results/tmp/`. 
+
+```{sh filename="bash"}
+ls -ltFh results/tmp/*.pairs
+```
+
+```{sh}
+-rw-rw-r-- 1 rsg rsg 615M 27 janv.  15:54 results/tmp/CH112.valid_idx_pcrfree.pairs
+-rw-rw-r-- 1 rsg rsg 943M 27 janv.  15:50 results/tmp/CH112.valid_idx_filtered.pairs
+-rw-rw-r-- 1 rsg rsg 1,2G 27 janv.  15:49 results/tmp/CH112.valid_idx.pairs
+-rw-rw-r-- 1 rsg rsg 1,1G 27 janv.  15:45 results/tmp/CH112.valid.pairs
+```
+
+How many pairs are listed in each `.pairs` file? 
+
+```{sh filename="bash"}
+wc -l results/tmp/*.pairs
+```
+
+```{sh}
+15809461 results/tmp/CH112.valid.pairs
+15809461 results/tmp/CH112.valid_idx.pairs
+12557203 results/tmp/CH112.valid_idx_filtered.pairs
+8090370 results/tmp/CH112.valid_idx_pcrfree.pairs
+```
+
+What do these `.pairs` files actually look like? 
+
+```{sh filename="bash"}
+head results/tmp/CH112.valid_idx_pcrfree.pairs -n 30
+```
+
+```{sh}
+## pairs format v1.0
+#sorted: chr1-pos1-chr2-pos2
+#columns: readID chr1 pos1 chr2 pos2 strand1 strand2 frag1 frag2
+#chromsize: I 230218
+#chromsize: II 813184
+#chromsize: III 316620
+#chromsize: IV 1531933
+#chromsize: V 576874
+#chromsize: VI 270161
+#chromsize: VII 1090940
+#chromsize: VIII 562643
+#chromsize: IX 439888
+#chromsize: X 745751
+#chromsize: XI 666816
+#chromsize: XII 1078177
+#chromsize: XIII 924431
+#chromsize: XIV 784333
+#chromsize: XV 1091291
+#chromsize: XVI 948066
+#chromsize: Mito 85779
+NS500150:527:HHGYNBGXF:1:11102:20886:5813       I       35      III     301620  +       +       0       8196
+NS500150:527:HHGYNBGXF:1:21112:2714:13921       I       39      V       543888  +       -       0       21278
+NS500150:527:HHGYNBGXF:1:12303:14200:17422      I       41      I       68819   +       -       0       385
+NS500150:527:HHGYNBGXF:3:22512:8255:11137       I       51      VIII    197898  +       +       0       31149
+NS500150:527:HHGYNBGXF:1:22306:8892:6435        I       52      V       523161  +       -       0       21145
+NS500150:527:HHGYNBGXF:1:22303:12518:17386      I       53      I       21088   +       +       0       80
+NS500150:527:HHGYNBGXF:4:12502:8300:8871        I       55      I       44355   -       -       0       204
+NS500150:527:HHGYNBGXF:2:12308:7097:9339        I       64      VII     401224  +       -       0       25718
+NS500150:527:HHGYNBGXF:3:13409:17355:18015      I       65      XIV     515520  +       -       0       60510
+NS500150:527:HHGYNBGXF:3:22610:19850:5032       I       66      I       10809   +       -       0       40
+```
+
+::: {.callout-tip}
+## Few notes on which `.pairs` file to use
+- The `*_pcrfree.pairs` file is probably the one you want to use in your analyses. If you check the output of `hicstuff`, you can see that it is indeed generated **after** pairs filtering, so it's ok to use it!
+- If you have a good reason to think that you may use pairs including PCR duplicates, go for the `*_filtered.pairs` file. 
+- If you have a good reason to think that you may use unfiltered pairs including looping DNA fragments or uncut DNA fragments, go for the `*.valid_idx.pairs` file. 
+- The remaining `*.valid.pairs` is redundant with the `*.valid_idx.pairs` and is probably not useful, it can be deleted. 
+:::
+
+A good practice is also to remove `.bam` files kept in the `tmp/` folder. 
+
+Eventually, I recommend creating a new `pairs/` folder, moving your `.pairs` files there, and deleting the remaining content of the `tmp/` folder: 
+
+```{sh filename="bash"}
+mkdir results/pairs/
+mv results/tmp/*valid_idx*.pairs results/pairs/
+ls -ltFh results/pairs/
+rm -rf results/tmp/
+```
+
+### Check the QC plots for sanity controls 
+
+Several QC plots are generated by `hicstuff`, to assess the quality of pairs identified by HiC. 
+
+> Understanding the `event_distance` plot
+
+![](results/plots/CH112_event_distance.pdf){height=550 width=100%}
+
+This plot illustrates how the nature of read pairs is inferred, based on the distance between the two reads (shown on the X axis) and their orientation. A pair of reads can have 4 different orientations: `--`, `++`, `-+` and `+-` (each `+` or `-` referring to the alignment on positive strand on negative strand of the DNA, i.e. directly on the genome reference or on its reverse complement). 
+
+* `--` and `++` pairs necessarily come from real religation events between two distant genomic loci (as long as there is at least > 0 restriction site between the two pairs). These pairs are **unambiguously informative**.
+* If there is no restriction site between reads of a `--`/`++` pair, this pair is annotated as "weird", as it should not exist. 
+* `+-` and `-+` pairs are **ambiguous**: they could either come from real religation events between two distant genomic loci (**informative** pairs) or from circular self-religated fragments ("loops") or undigested fragments ("uncuts"). `hicstuff` **filters** these ambiguous pairs by finding an appropriate threshold in minimum number of restriction fragments. `+-` and `-+` pairs with less restriction fragments between their extremities are considered "uncut" fragments and "self-religated" ("loops") fragments and are discarded. The rest of the `+-` and `-+` pairs are kept. 
+
+`hicstuff` generates a plot showing the distribution of these possible events: 
+
+* `--` and `++` informative pairs (in green)
+* `--` and `++` weird pairs (with 0 restriction site between their extremities, in gray/dark)
+* `-+` pairs: before the "loops" threshold, these pairs are annotated as "loops"; past this threshold, these pairs are considered informative. 
+* `+-` pairs: before the "uncut" threshold, these pairs are annotated as "uncut"; past this threshold, these pairs are considered informative. 
+
+::: {.callout-tip}
+## How hicstuff calculates the thresholds to estimate "loops" and "uncuts"
+Filtering consists in excluding `+-` and `-+` pairs if their reads are closer 
+than a threshold in minimum number of restriction fragments. This threshold 
+represents **the distance at which the abundance of these events stop deviating significantly from the rest of the library**. 
+It is estimated using the median absolute deviation of pairs.
+
+More info [here](https://hicstuff.readthedocs.io/en/latest/api/hicstuff.html#module-hicstuff.filter)
+:::
+
+> Understanding the `event_distribution` plot
+
+![](results/plots/CH112_event_distribution.pdf){height=550 width=100%}
+
+This pie chart represents the overall distribution of pairs for a Hi-C sample, as annotated by hicstuff. 
+
+- Anything in purple (3D inter) or neon green (3D intra) comes is from **informative**, selected pairs. This is the value you want to be the highest! IME anything >50% is good. Lower than 20%, you'd have to question the quality of your biotin enrichment... 
+- "Weirds" should be << 1%. 
+- Loops and uncut will vary, according to their infered thresholds (explained in the previous subsection). The thresholds used to infer loops (uncut) fragments from `-+` (`+-`) pairs are also printed in this plot. 
+
+> Understanding the `distance_law` plot
+
+![](results/plots/CH112_distance_law.pdf){height=500 width=100%}
+
+The distance law is a good way to check that each of the chromosomes behaves as expected. In a yeast G1-synchronized sample, you expect a straight-ish line, with a slope of ~ -1.2 -> 1.5. In a yeast G2M-synchronized sample, you expect increased contacts in the 10-50kb range, visible as a "shoulder" in the curve. 
+
+## Creating a `.cool` contact matrix
+
+### What is a `.cool` file?
+
+A `.pairs` is the most important file generated in a Hi-C pipeline, but it's not the easiest one to use: it is huge, uncompressed, and unsummarized. 
+In order to simplify the representation of Hi-C, pairs can be binned using a fixed-sized window (e.g. 1000 bp): every pair end falling in a 1kb bin will be assigned to this bin (same for the other end). 
+
+Eventually, one could transform this set of three (unambiguous informative) pairs: 
+
+```{sh filename="CH112.valid_idx_pcrfree.pairs"}
+<read_id> <chrom1> <pos1> <chrom2> <pos2> <strand1> <strand2>
+NS500150:527:HHGYNBGXF:4:11503:19728:1057    I    32    I    1174    +    +
+NS500150:527:HHGYNBGXF:1:22306:8892:6435     I    32    I    3725    +    +
+NS500150:527:HHGYNBGXF:2:13311:15119:13685   I    78    I    3725    -    -
+```
+
+into a couple of files: 
+
+1. A `matrix` file (effectively, a sparse matrix, which stores non-zero values in triplet format ijx): 
+
+```{sh filename="matrix.mtx"}
+<bin1> <bin2> <count>
+1 2 1
+1 4 2
+```
+
+::: {.callout-tip}
+## COO (coordinate) sparse matrix structure
+![](https://matteding.github.io/images/coo.gif)
+Note how only non-zero values are stored, efficiently reducing the disk storage footprint. 
+:::
+
+2. A `regions` file:
+
+```{sh filename="regions.bed"}
+<chr> <start> <end>
+I    1       1000
+I    1001    2000
+I    2001    3000
+I    3001    4000
+```
+
+A more sophisticated way to do this is to parse a `pairs` file with `cooler`. `cooler` does exactly what is shown above, but then compresses and indexes the information stored in a `.cool` file. 
+
+Eventually, the `.cool` (a variant of HDF5) format is just a sophisticated file structure to store rectangular matrices. 
+Read more [here](https://cooler.readthedocs.io/en/latest/datamodel.html). 
+
+### Cooler
+
+`cooler` library was written to perform several important operations: 
+
+1. `cload`: parse `.pairs` files into `.cool` files
+2. `balance`: normalize Hi-C contact matrices (a.k.a "balancing")
+2. `dump`: facilitate random access of a subset of the data using genomic coordinates
+3. `show`: enable visualization of Hi-C data 
+3. `zoomify`: generate a multi-resolution `.mcool` file from a `.cool` file
+
+```{sh filename="bash"}
+cooler --help
+cooler cload --help
+cooler balance --help
+cooler dump --help
+cooler show --help
+cooler zoomify --help
+```
+
+#### `cooler cload` 
+
+Let's first create a `.cool` file from a `.pairs` file. We can use any pairs file we want. In our case, since we want **filtered and pcr-free** pairs, we should use the `*valid_idx_pcrfree.pairs` file. 
+
+The generic command for `cooler cloar` is something like: 
+
+```{sh}
+## GENERIC COMMAND: TO COMPLETE
+## DO NOT RUN THIS!
+cooler cload \
+   pairs \
+   --chrom1 ... --pos1 ... \ # chrom1 and pos1 column indices
+   --chrom2 ... --pos2 ... \ # chrom2 and pos2 column indices
+   <CHROMSIZES>:<BINSIZE> \ # path to chrom.sizes file followed by ":" then the desired bin size
+   <PAIRS_PATH> \ # path to the input pairs file
+   <COOL_PATH> # path to the output cool file
+```
+
+The `CHROMSIZES` should be a two-column text stream with chromosome names and lengths. One way to generate this is to use the `` file generated by `hicstuff`: 
+
+```{sh filename="bash"}
+sed 1d results/CH112.chr.tsv | cut -f1-2
+```
+
+```{sh}
+I       230218
+II      813184
+III     316620
+IV      1531933
+V       576874
+VI      270161
+VII     1090940
+VIII    562643
+IX      439888
+X       745751
+XI      666816
+XII     1078177
+XIII    924431
+XIV     784333
+XV      1091291
+XVI     948066
+Mito    85779
+```
+
+We can execute `cooler cload` by "feeding" this text stream directly, using `<(...)` trick: 
+
+```{sh filename="bash"}
+mkdir results/matrix
+cooler cload \
+   pairs \
+   --chrom1 2 --pos1 3 \
+   --chrom2 4 --pos2 5 \
+   <(sed 1d results/CH112.chr.tsv | cut -f1-2):1000 \
+   results/pairs/CH112.valid_idx_pcrfree.pairs \
+   results/matrix/CH112.cool
+```
+
+We can inspect the generated `.cool` file using `cooler`: 
+
+```{sh filename="bash"}
+cooler tree results/matrix/CH112.cool
+cooler info results/matrix/CH112.cool
+grep -v "#" results/pairs/CH112.valid_idx_pcrfree.pairs | wc -l 
+```
+
+::: {.callout-tip}
+## So what does `hicstuff` generate as a contact matrix?? 
+You probably have noticed that `hicstuff pipeline` automatically creates a `results/<PREFIX>.cool` file. 
+To understand the differences between `results/<PREFIX>.cool` and `results/matrix/<PREFIX>.cool`, one 
+can use `cooler info`. Have a look at the `"bin-size"` and the `"bin-type"` keys printed in the terminal. 
+
+```{sh filename="bash"}
+cooler info results/CH112.cool
+cooler info results/matrix/CH112.cool
+```
+
+The immediate output of `hicstuff pipeline` is a bin-less contact matrix! Each column/row actually represents 
+a restriction fragment, rather than a fixed-width bin. The sum of contacts (`"sum"`) is the same between the two files, 
+but the number of bins (columns/rows) is different!
+
+Here, we use `cooler cload` to convert a `.pairs` file into a `.cool` file. We could also have used `hicstuff rebin`, 
+which uses a slightly different syntax to perform the same operation. 
+:::
+
+::: {.callout-tip}
+## Filtering unwanted chromosomes... 
+The `<(...)` trick illustrated above allows one to easily select/remove any chromosome they want to generate a chromosome-specific `.cool` file from a `.pairs` file: 
+
+```{sh filename="bash"}
+# --- Only select chromosome "II"
+cooler cload \
+   pairs \
+   --chrom1 2 --pos1 3 \
+   --chrom2 4 --pos2 5 \
+   <(sed 1d results/CH112.chr.tsv | cut -f1-2 | grep -P "^II\t"):1000 \
+   results/pairs/CH112.valid_idx_pcrfree.pairs \
+   results/matrix/CH112_chrII.cool
+cooler info results/matrix/CH112_chrII.cool
+
+# --- Filter out "Mito" chromosome
+cooler cload \
+   pairs \
+   --chrom1 2 --pos1 3 \
+   --chrom2 4 --pos2 5 \
+   <(sed 1d results/CH112.chr.tsv | cut -f1-2 | grep -Pv "^Mito\t"):1000 \
+   results/pairs/CH112.valid_idx_pcrfree.pairs \
+   results/matrix/CH112_noMito.cool
+cooler info results/matrix/CH112_noMito.cool
+```
+:::
+
+#### `cooler zoomify` 
+
+One of the strength of `.cool` files is that they can be nested. In this case, one can generate a `.mcool` file, effectively containing several `.cool` files at different resolutions. 
+
+```{sh filename="bash"}
+cooler zoomify --help
+```
+
+We want to generate multi-resolution `.mcool` file for our Hi-C sample in order to study chromosome conformation at different scales, e.g. structural loops (~ tens of kb) to chromatin domains (~ hundreds of kb up to Mb). 
+
+At the same time, we will add normalized contact frequencies to each contact matrix. This can be done by using the `--balance` flag.
+
+```{sh filename="bash"}
+cooler zoomify \
+   --nproc 8 \
+   --resolutions 1000,2000,4000,8000,16000 \
+   --balance \
+   --out results/matrix/CH112.mcool \
+   results/matrix/CH112.cool
+```
+
+#### Recover contacts from a `.cool` file
+
+A `.mcool` file is actually a nested list of `.cool` files!
+
+```{sh filename="bash"}
+cooler tree results/matrix/CH112.mcool
+```
+
+Append `::/resolutions/<BINSIZE>` to the end of `.mcool` file to access a specific resolution:
+
+```{sh filename="bash"}
+cooler tree results/matrix/CH112.mcool::/resolutions/16000
+cooler info results/matrix/CH112.mcool::/resolutions/16000
+```
+
+Raw contact counts (stored as a sparse matrix) along with the corresponding information regarding the genomic bins and the chromosomes can be recovered from a `.cool` file using `cooler dump`.
+
+```{sh filename="bash"}
+cooler dump --help
+cooler dump --header --table chroms results/matrix/CH112.mcool::/resolutions/16000
+cooler dump --header --table bins results/matrix/CH112.mcool::/resolutions/16000 | head
+cooler dump --header --table pixels --balanced results/matrix/CH112.mcool::/resolutions/16000 | head
+cooler dump --header --table pixels --balanced --join results/matrix/CH112.mcool::/resolutions/16000 | head
+```
+
+One can access specific genomic locations using `--range` flag: 
+
+```{sh filename="bash"}
+cooler dump \
+   --header \
+   --table pixels \
+   --balanced \
+   --join \
+   --range "I:48000-96000" \
+   results/matrix/CH112.mcool::/resolutions/16000
+```
+
+#### Imaging a contact matrix 
+
+The text format seen above is not very easy to parse, i.e. not very visually informative. Rather than dumping the `.cool` content as a text, we can use `cooler` to parse it into an image, a heatmap representing intensity of contacts between pairs of genomic loci. 
+
+```{sh filename="bash"}
+cooler show \
+   --balanced \
+   --out results/matrix/CH112_2kb-res_II-200kb-700kb.pdf \
+   --dpi 500 \
+   results/matrix/CH112.mcool::/resolutions/2000 \
+   II:200000-700000
+```
+
+::: {.callout-tip}
+## Useful flags for cooler show
+* --balanced       If added, will plot the **normalized** contact matrix rather than the raw counts.
+* --zmin FLOAT     The minimal value of the color scale. 
+* --zmax FLOAT     The maximal value of the color scale. 
+* --cmap TEXT      The colormap used to display the contact matrix (see the full list at http://matplotlib.org/examples/color/colormaps_reference.html
+:::
+
+```{sh filename="bash"}
+cooler show \
+   --balanced \
+   --out results/matrix/CH112_2kb-res_II-200kb-700kb_-3to-1_inferno.pdf \
+   --dpi 500 \
+   --zmin='-3' \
+   --zmax='-1' \
+   --cmap="inferno" \
+   results/matrix/CH112.mcool::/resolutions/2000 \
+   II:200000-700000
+```
+
+## Using `chromosight` to map structural features
+
+Mapping loops made easy, by Cyril Matthey-Doret!
+
+```{sh filename="bash"}
+chromosight --help
+```
+
+Generic command: 
+
+```{sh filename="bash"}
+## GENERIC COMMAND: TO COMPLETE
+## DO NOT RUN THIS!
+chromosight detect \
+   --pattern loops \
+   --pearson <THRESHOLD> \
+   --threads <@> \
+   <contact_map> \
+   <prefix>
+```
+
+In our case: 
+
+```{sh filename="bash"}
+mkdir results/loops/
+chromosight detect \
+   --pattern loops \
+   --pearson 0.3 \
+   --threads 4 \
+   results/matrix/CH112.mcool::/resolutions/2000 \
+   results/loops/CH112
+```
+
+```{sh filename="bash"}
+tree results/loops/
+head results/loops/CH112.tsv
+```
+
+## Recap: from reads to loops 
+
+```{sh filename="bash"}
+# ------ DEFINE ENVIRONMENT VARIABLES
+PREFIX=CH112
+BINSIZE=1000
+MULTIRES="1000,2000,4000,8000,16000"
+THREADS=12
+ENZYME="DpnII,HinfI"
+GENOME="genomes/S288c/S288c.fa"
+
+# ------ Prepare output folders
+mkdir results/
+mkdir results/matrix
+mkdir results/loops
+mkdir results/pairs
+
+# ------ Fastq -> pairs
+hicstuff pipeline \
+   --distance-law \
+   --duplicates \
+   --enzyme "${ENZYME}" \
+   --filter \
+   --mapping normal \
+   --matfmt cool \
+   --no-cleanup \
+   --outdir results \
+   --plot \
+   --prefix "${PREFIX}" \
+   --threads "${THREADS}" \
+   --genome "${GENOME}" \
+   data/"${PREFIX}"_R1.fq.gz \
+   data/"${PREFIX}"_R2.fq.gz
+
+mv results/tmp/*valid_idx*.pairs results/pairs/
+
+# ------ pairs -> cool
+cooler cload \
+   pairs \
+   --chrom1 2 --pos1 3 \
+   --chrom2 4 --pos2 5 \
+   <(sed 1d results/"${PREFIX}".chr.tsv | cut -f1-2):"${BINSIZE}" \
+   results/pairs/"${PREFIX}".valid_idx_pcrfree.pairs \
+   results/matrix/"${PREFIX}".cool
+
+# ------ cool -> mcool
+cooler zoomify \
+   --nproc "${THREADS}" \
+   --resolutions "${MULTIRES}" \
+   --balance \
+   --out results/matrix/"${PREFIX}".mcool \
+   results/matrix/"${PREFIX}".cool
+
+# ------ cool -> loops
+chromosight detect \
+   --pattern loops \
+   --threads "${THREADS}" \
+   results/matrix/"${PREFIX}".mcool::/resolutions/"${BINSIZE}" \
+   results/loops/"${PREFIX}"
+```
+
+## Going further: `cooltools`
+
+Several advanced features are available with `cooltools`, notably: 
+
+1. Finding "dots": i.e. finding loops in a contact map
+1. Computing eigenvectors: i.e. annotating compartments in a contact map (usually @ coarse resolution)
+1. Computing insulation: i.e. annotating topological domains in a contact map (usually @ finer resolution)
+1. Computing pileup: a.k.a Aggregated Plot Analysis (APA)
+1. Computing saddle plots
+
+## Going even further: `HiCExperiment` ecosystem in R
+
+* [HiCExperiment](https://jserizay.com/HiCExperiment/): 
+
+   - Import and subset contact matrices (`.cool`, `.hic`, `HiC-Pro` derived...)
+   - Import and subset pairs files
+
+* [HiContacts](https://jserizay.com/HiContacts/):
+
+   - Arithmetics: merge, divide, smoothen, balance, autocorrelate, ...
+   - Analysis: P(s), virtual 4C, scalograms, cis/trans interactions
+   - Mapping: chromatin loops (via `chromosight`), topological domains, compartments
+   - Visualizing: contact maps, features, aggregated maps, saddle plots
+
+* [HiCool](https://jserizay.com/HiCool/):
+
+   - Runs `hicstuff`+`cooler` embarked in R
+   - Generates multi-resolution, balanced `.mcool` files from read pairs
+   - Computes automated reports
+
+* [fourDNData](https://jserizay.com/HiCool/):
+
+   - Gateway to the 4DN consortium data portal
+
+## Extra: Integrating HiC with other genome-wide modalities
+
+```{sh filename="bash"}
+mamba install -c bioconda \
+   bioconductor-rtracklayer \
+   bioconductor-plyranges \
+   r-ggplot2 \
+   r-tidyr
+```
+
+```{R filename="R"}
+library(ggplot2)
+library(rtracklayer)
+library(plyranges)
+
+# - Import gene annotations as GenomicRanges
+genes <- import('genomes/S288c/S288c.gtf') |> 
+   filter(type == 'gene')
+
+# - Import tracks as Run-length vectors
+scc1 <- import('tracks/CH224.CPM.bw', as = 'Rle')
+rnaseq_fwd <- import('tracks/SRR2045244.fwd.CPM.bw', as = 'Rle')
+rnaseq_rev <- import('tracks/SRR2045244.rev.CPM.bw', as = 'Rle')
+
+# - Define locus of interest
+locus <- GRanges("II:300000-350000")
+bins <- tile(locus, width = 10)[[1]]
+
+# - Average tracks over bins
+df <- data.frame(
+   pos = start(bins), 
+   scc1 = mean(scc1[bins]), 
+   rnaseq_fwd = mean(rnaseq_fwd[bins]), 
+   rnaseq_rev = -mean(rnaseq_rev[bins])  
+) |> 
+   tidyr::pivot_longer(-pos, names_to = 'track', values_to = 'score') |> 
+   dplyr::mutate(track = factor(track, c('scc1', 'rnaseq_fwd', 'rnaseq_rev')))
+
+# - Plot tracks 
+p <- ggplot(df, aes(x = pos, y = score, fill = track)) + 
+   geom_area(position = 'identity', alpha = 0.5) + 
+   scale_x_continuous(expand = c(0, 0)) + 
+   theme_bw() + 
+   theme(legend.position = 'bottom')
+ggsave('results/plots/tracks.pdf', width = 10, height = 4)
+
+# - Plot faceted tracks 
+p <- ggplot(df, aes(x = pos, y = score, fill = track)) + 
+   geom_area(position = 'identity') + 
+   scale_x_continuous(expand = c(0, 0)) + 
+   theme_bw() + 
+   theme(legend.position = 'bottom') + 
+   facet_grid(track~., scales = 'free')
+ggsave('results/plots/tracks_facets.pdf', width = 10, height = 7)
+```
