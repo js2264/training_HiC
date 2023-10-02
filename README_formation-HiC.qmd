@@ -46,8 +46,6 @@ More specifically, this will teach you:
 
 ## Get sequencing reads data from `Rsg_reads` 
 
-### Download fastq files 
-
 First, you need to set up few environment variables. Let's start with the user: who are you? Start by creating a `USER` variable saving your Pasteur ID. 
 
 ```{sh filename="bash"}
@@ -57,10 +55,12 @@ USER=<...> ## e.g. USER=jaseriza
 We will use library reads from: 
 
 ::: {.callout-tip}
-## Libraries
+
+#### Libraries
 - `CH112` Hi-C library in a WT S288C background
 - `CH224` (input: `CH225`) Scc1 ChIP-seq library in a WT S288C background
 - `SRR2045244` RNA-seq library
+
 :::
 
 ```{sh filename="bash"}
@@ -97,72 +97,10 @@ zcat data/CH112_S4_R1_001.gz | head     ## `head` = Check the first 10 lines of 
 zcat data/CH112_S4_R2_001.gz | wc -l    ## `wc -l` = Count the number of lints in a text file
 ```
 
-## Create a `conda` environment and install many required softwares for HiC & co.
+## Create a `micromamba` environment and install required softwares for Hi-C
 
-To process Hi-C reads, we need at least: 
-
-- An aligner (e.g. `bowtie2`)
-- An pairs processor (e.g. `hicstuff`)
-- An Hi-C contact matrix generator (e.g. `cooler`)
-
-To install these softwares, we will rely on a dedicated `conda` environment.
-Let's see how we can install `conda`, create en environment and install required packages. 
-
-```{sh filename="bash"}
-curl micro.mamba.pm/install.sh | bash
-#  ------------------------------ - ----
-# `curl ...`: Fetch a file from internet
-#                                `|`: ... and ...
-#                                  `bash`: Execute it
-```
-
-At this stage, you will have to restart a new terminal to continue the work. 
-Otherwise, you may encounters errors such as `command not found`.
-
-```{sh filename="bash"}
-micromamba --version
-micromamba config prepend channels bioconda
-micromamba config prepend channels conda-forge
-
-micromamba create -n HiC_micromamba \
-   'python>=3.7.12' \
-   'hicstuff>=3.1.5' 'chromosight>=1.6.3' \
-   'cooler>=0.9.1' 'cooltools>=0.5.1' \
-   'samtools>=1.7' 'bowtie2>=2.4.5' 'bedtools>=2.30.0' 'deeptools>=3.5.1' \
-   'matplotlib>=3.5.3' 'tree>=2.0.0'  
-#  ---------- ------ ------ --------------
-# `micromamba`: run micromamba main command
-#            `create`: Create a new conda environment ...
-#                   `-n HiC`: ... named "HiC" ...
-#                          `python=`: ... and pre-install `python` package in this "HiC" env.
-
-micromamba activate HiC_micromamba
-#  ----- -------- ---
-# `micromamba`: run micromamba main command
-#       `activate`: Activate an existing environment ...
-#                `HiC`: ... specifically the "HiC" env. we created
-   
-python --version
-command -V python
-
-hicstuff --version
-command -V hicstuff
-
-samtools --version
-cooler --version
-```
-
-::: {.callout-tip}
-## conda vs `anaconda` vs `miniconda` vs `mamba` vs `micromamba`
-All these softwares fit the same purpose: managing package installation in dedicated environments. 
-`conda` is the actual **package manager**, while `anaconda` or `miniconda` are 
-software distributions, i.e. a set of softwares, **including `conda`**. 
-`anaconda` includes 150+ scientific softwares whereas `microconda` has a much 
-tinier disk storage footprint. It includes `python` by default, but not much else. 
-`mamba` and `micromamba` are a newer flavour of `conda` and `miniconda`: they 
-can perform the same types of operations (create environment, install packages, ...)
-but much faster as it supports parallelized jobs!
-:::
+Check the `README.md` on the [Github repository](https://github.com/js2264/training_HiC) to see how to set up a 
+`micromamba` environment. 
 
 ## Process Hi-C data with hicstuff
 
@@ -178,7 +116,8 @@ hicstuff pipeline --help
 If we want to run the entire hicstuff pipeline, we will need at least: 
 
 ::: {.callout-tip}
-## Arguments
+
+#### Arguments
 - `--genome`=FILE 
 - `<input1>`
 - `<input2>`
@@ -211,48 +150,60 @@ hicstuff pipeline \
 ```
 
 ::: {.callout-tip}
-## Options I find useful
-* --distance-law       Generates a distance law file and plot
-* --duplicates         Filter out PCR duplicates based on read positions.
-* --enzyme={STR|INT}   Restriction enzyme or "mnase"
-* --filter             Filter out spurious 3C events (loops and uncuts) using hicstuff filter (Cournac et al. BMC Genomics, 2012)
-* --mapping=STR        normal|iterative|cutsite mapping strategy
-* --matfmt=STR         The format of the output sparse matrix. Can be "bg2" for 2D Bedgraph format, "cool" for Mirnylab's cooler software, or "graal" for graal-compatible plain text COO format. [default: graal]
-* --no-cleanup         **Super important!!** Needed to keep intermediate pairs file
-* --outdir=DIR         Output directory
-* --plot               Generates informative QC plots in the output directory at different steps of the pipeline.
-* --prefix=STR         Overrides default filenames and prefixes all output files with a custom name.
-* --threads=INT        Number of threads to allocate.
+
+#### Options I find useful
+
+* `--distance-law`       Generates a distance law file and plot
+* `--plot`               Generates informative QC plots in the output directory at different steps of the pipeline.
+* `--filter`             Filter out spurious 3C events (loops and uncuts) using hicstuff filter (Cournac et al. BMC Genomics, 2012)
+* `--duplicates`         Filter out PCR duplicates based on read positions.
+* **--binning**            **Set a base resolution to generate binned matrix file.**
+
+:::
+
+::: {.callout-tip}
+
+#### Other useful options
+
+* `--enzyme={STR|INT}`   Restriction enzyme or "mnase"
+* `--mapping=STR`        normal|iterative|cutsite mapping strategy
+* `--outdir=DIR`         Output directory
+* `--prefix=STR`         Overrides default filenames and prefixes all output files with a custom name.
+* `--threads=INT`        Number of threads to allocate.
+
 :::
 
 So, for me, a typical "extended" hicstuff pipeline command may look like this: 
 
 ```{sh filename="bash"}
 hicstuff pipeline \
-   --distance-law \
-   --duplicates \
+   --threads 12 \
    --enzyme DpnII,HinfI \
    --filter \
-   --mapping normal \
-   --matfmt cool \
-   --no-cleanup \
-   --outdir results \
-   --plot \
+   --duplicates \
    --prefix CH112 \
-   --threads 12 \
+   --binning 1000 \
+   --plot \
+   --distance-law \
+   --outdir results \
    --genome genomes/S288c/S288c.fa \
    data/CH112_S4_R1_001.gz \
    data/CH112_S4_R2_001.gz
 ```
 
-::: {.callout-info}
-## Few notes on hicstuff pipeline
-- IMO, `--filter` is what makes `hicstuff` unique compared to other workflows. **DO USE IT!!**
-- `--matfmt cool` should be default in hicstuff. IMO, other formats are not as convenient, especially if you are going to map on larger genomes. 
+::: {.callout-tip}
+
+#### Few notes on hicstuff pipeline
+
+Here are several important notes regarding `hicstuff pipeline`:
+
+- **DO SET A `--binning 1000` (or other resolution). This will automatically bin your matrix at the chosen resolution and at larger resolutions.**
+- IMO, `--filter` is what makes `hicstuff` unique compared to other workflows.
 - With longer reads, I would typically run hicstuff in `--mapping iterative` mode to map as many reads as possible. 
 - If you are looking for maximum mappability and pairs number, `--mapping cutsite` will further increase these numbers. It will also exponentially increase computing time and disk storage, be warned. 
 - `enzyme` can take a bin size to directly bin aligned reads into fixed-width genomic windows, but filtering won't work. This is generally non-advised.  
 - I actually prefer to compute the P(s) (distance law) directly in R myself, from the `pairs` file. We'll see how to do that later. In this case, you can skip `--distance-law`, for larger datasets this step takes a significant amount of time to compute. 
+
 :::
 
 ### Checking the output files 
@@ -261,11 +212,15 @@ hicstuff pipeline \
 tree results
 ```
 
-::: {.callout-tip}
-## Output files
+::: {.callout}
+
+#### Output files
+
+```sh
 results/  
 |-- CH112.chr.tsv  
-|-- CH112.cool  
+|-- CH112.mcool                     ## There are the main output files
+|-- CH112.valid_idx_pcrfree.pairs   ## There are the main output files
 |-- CH112.distance_law.txt  
 |-- CH112.frags.tsv  
 |-- CH112.hicstuff_20230127153908.log  
@@ -287,9 +242,10 @@ results/
 ....|-- CH112.valid.pairs  
 ....|-- CH112.valid_idx.pairs  
 ....|-- CH112.valid_idx_filtered.pairs  
-....`-- CH112.valid_idx_pcrfree.pairs  
   
 2 directories, 22 files  
+```
+
 :::
 
 We can check `hicstuff` log to make sure everything went smoothly: 
@@ -299,13 +255,17 @@ cat results/CH112.hicstuff_20230127153908.log
 ```
 
 ```{sh}
-## hicstuff: v3.1.5 log file
-## date: 2023-01-27 15:39:08
+## hicstuff: v3.2.1 log file
+## date: 2023-10-02 23:57:25
 ## enzyme: DpnII,HinfI
 ## input1: data/CH112_S4_R1_001.gz
 ## input2: data/CH112_S4_R2_001.gz
 ## ref: genomes/S288c/S288c.fa
 ---
+INFO :: The default output format is now `.cool`. The Hi-C matrix will be generated with cooler v0.9.3 (Abdennur & Mirny, Bioinformatics 2020).
+INFO :: bowtie2 index not found at results/tmp/testHiC.genome.fa.gz, generating a local temporary index.
+INFO :: Checking content of fastq files.
+INFO :: 47419366 reads found in each fastq file.
 2023-01-27,15:39:17 :: INFO :: bowtie2 index not found at results/tmp/CH112.genome.fa.gz, generating a local temporary index.
 2023-01-27,15:45:33 :: INFO :: 77% reads (single ends) mapped with Q >= 30 (36505851/47419366)
 2023-01-27,15:49:17 :: INFO :: Filtering with thresholds: uncuts=12 loops=14
@@ -313,6 +273,22 @@ cat results/CH112.hicstuff_20230127153908.log
 2023-01-27,15:50:12 :: INFO :: 3252258 pairs discarded: Loops: 752085, Uncuts: 2489391, Weirds: 10782
 2023-01-27,15:50:12 :: INFO :: 12557183 pairs kept (79.43%)
 2023-01-27,15:54:28 :: INFO :: 35% PCR duplicates have been filtered out (4466833 / 12557183 pairs)
+INFO:cooler.create:Writing chunk 0: results/tmp6082rqc_.multi.cool::0
+INFO:cooler.create:Creating cooler at "results/tmp6082rqc_.multi.cool::/0"
+INFO:cooler.create:Writing chroms
+INFO:cooler.create:Writing bins
+INFO:cooler.create:Writing pixels
+INFO:cooler.create:Writing indexes
+INFO:cooler.create:Writing info
+INFO:cooler.create:Merging into results/testHiC.cool
+INFO:cooler.create:Creating cooler at "results/testHiC.cool::/"
+INFO:cooler.create:Writing chroms
+INFO:cooler.create:Writing bins
+INFO:cooler.create:Writing pixels
+INFO:cooler.reduce:nnzs: [50982]
+INFO:cooler.reduce:current: [50982]
+INFO:cooler.create:Writing indexes
+INFO:cooler.create:Writing info
 2023-01-27,15:55:37 :: INFO :: Contact map generated after 0h 16m 29s
 ```
 
@@ -340,14 +316,24 @@ The `.pairs` format has been formally defined as a tab-delimited text file conta
 |6|	strand1|	the strand of the alignment on side 1|
 |7|	strand2|	the strand of the alignment on side 2|
 
-A number of `.pairs` files are present in `results/tmp/`. 
+The `pairs` file used to generate the Hi-C `.mcool` matrix is present in the 
+output directory.
+
+```{sh filename="bash"}
+ls -ltFh results/*.pairs*
+```
+
+```{sh}
+-rw-r--r-- 1 rsg rsg 1.2M Oct  2 23:58 results/CH112.valid_idx_pcrfree.pairs.gz
+```
+
+Additionally, a number of `.pairs` files are present in `results/tmp/` (if `--no-cleanup` was set): 
 
 ```{sh filename="bash"}
 ls -ltFh results/tmp/*.pairs
 ```
 
 ```{sh}
--rw-rw-r-- 1 rsg rsg 615M 27 janv.  15:54 results/tmp/CH112.valid_idx_pcrfree.pairs
 -rw-rw-r-- 1 rsg rsg 943M 27 janv.  15:50 results/tmp/CH112.valid_idx_filtered.pairs
 -rw-rw-r-- 1 rsg rsg 1,2G 27 janv.  15:49 results/tmp/CH112.valid_idx.pairs
 -rw-rw-r-- 1 rsg rsg 1,1G 27 janv.  15:45 results/tmp/CH112.valid.pairs
@@ -406,23 +392,16 @@ NS500150:527:HHGYNBGXF:3:22610:19850:5032       I       66      I       10809   
 ```
 
 ::: {.callout-tip}
-## Few notes on which `.pairs` file to use
-- The `*_pcrfree.pairs` file is probably the one you want to use in your analyses. If you check the output of `hicstuff`, you can see that it is indeed generated **after** pairs filtering, so it's ok to use it!
+
+#### Few notes on which `.pairs` file to use
+- The `*_pcrfree.pairs` file is the latest file generated (after filtering) if you have specified `--duplicates`. 
 - If you have a good reason to think that you may use pairs including PCR duplicates, go for the `*_filtered.pairs` file. 
-- If you have a good reason to think that you may use unfiltered pairs including looping DNA fragments or uncut DNA fragments, go for the `*.valid_idx.pairs` file. 
-- The remaining `*.valid.pairs` is redundant with the `*.valid_idx.pairs` and is probably not useful, it can be deleted. 
+- If you have a good reason to think that you may use unfiltered pairs (including looping DNA fragments or uncut DNA fragments), go for the `*.valid_idx.pairs` file. 
+- The remaining `*.valid.pairs` is redundant with the `*.valid_idx.pairs` and is probably not useful, it can and should be deleted. 
+
 :::
 
 A good practice is also to remove `.bam` files kept in the `tmp/` folder. 
-
-Eventually, I recommend creating a new `pairs/` folder, moving your `.pairs` files there, and deleting the remaining content of the `tmp/` folder: 
-
-```{sh filename="bash"}
-mkdir results/pairs/
-mv results/tmp/*valid_idx*.pairs results/pairs/
-ls -ltFh results/pairs/
-rm -rf results/tmp/
-```
 
 ### Check the QC plots for sanity controls 
 
@@ -446,13 +425,16 @@ This plot illustrates how the nature of read pairs is inferred, based on the dis
 * `+-` pairs: before the "uncut" threshold, these pairs are annotated as "uncut"; past this threshold, these pairs are considered informative. 
 
 ::: {.callout-tip}
-## How hicstuff calculates the thresholds to estimate "loops" and "uncuts"
+
+#### How hicstuff calculates the thresholds to estimate "loops" and "uncuts"
+
 Filtering consists in excluding `+-` and `-+` pairs if their reads are closer 
 than a threshold in minimum number of restriction fragments. This threshold 
 represents **the distance at which the abundance of these events stop deviating significantly from the rest of the library**. 
 It is estimated using the median absolute deviation of pairs.
 
 More info [here](https://hicstuff.readthedocs.io/en/latest/api/hicstuff.html#module-hicstuff.filter)
+
 :::
 
 > Understanding the `event_distribution` plot
@@ -465,13 +447,19 @@ This pie chart represents the overall distribution of pairs for a Hi-C sample, a
 - "Weirds" should be << 1%. 
 - Loops and uncut will vary, according to their infered thresholds (explained in the previous subsection). The thresholds used to infer loops (uncut) fragments from `-+` (`+-`) pairs are also printed in this plot. 
 
-> Understanding the `distance_law` plot
-
-![](results/plots/CH112_distance_law.pdf){height=500 width=100%}
-
-The distance law is a good way to check that each of the chromosomes behaves as expected. In a yeast G1-synchronized sample, you expect a straight-ish line, with a slope of ~ -1.2 -> 1.5. In a yeast G2M-synchronized sample, you expect increased contacts in the 10-50kb range, visible as a "shoulder" in the curve. 
-
 ## Creating a `.cool` contact matrix
+
+::: {.callout-note icon='true'}
+
+### **IMPORTANT**
+
+If you have specified a `--binning` base resolution, `hicstuff pipeline` will 
+generate and bin the contact matrix at the desired resolution.  
+In this case, the following section can be read to understand what is 
+performed, but there is no need to perform any of these operations as they 
+are taken care of by `hicstuff pipeline`.
+
+:::
 
 ### What is a `.cool` file?
 
@@ -498,9 +486,12 @@ into a couple of files:
 ```
 
 ::: {.callout-tip}
-## COO (coordinate) sparse matrix structure
+
+#### COO (coordinate) sparse matrix structure
+
 ![](https://matteding.github.io/images/coo.gif)
 Note how only non-zero values are stored, efficiently reducing the disk storage footprint. 
+
 :::
 
 2. A `regions` file:
@@ -603,26 +594,20 @@ grep -v "#" results/pairs/CH112.valid_idx_pcrfree.pairs | wc -l
 ```
 
 ::: {.callout-tip}
-## So what does `hicstuff` generate as a contact matrix?? 
-You probably have noticed that `hicstuff pipeline` automatically creates a `results/<PREFIX>.cool` file. 
-To understand the differences between `results/<PREFIX>.cool` and `results/matrix/<PREFIX>.cool`, one 
-can use `cooler info`. Have a look at the `"bin-size"` and the `"bin-type"` keys printed in the terminal. 
 
-```{sh filename="bash"}
-cooler info results/CH112.cool
-cooler info results/matrix/CH112.cool
-```
+#### So what does `hicstuff` generate as a contact matrix?? 
 
-The immediate output of `hicstuff pipeline` is a bin-less contact matrix! Each column/row actually represents 
+If no `-binning` is set, the output of `hicstuff pipeline` is a bin-less 
+contact matrix. Each column/row actually represents 
 a restriction fragment, rather than a fixed-width bin. The sum of contacts (`"sum"`) is the same between the two files, 
 but the number of bins (columns/rows) is different!
 
-Here, we use `cooler cload` to convert a `.pairs` file into a `.cool` file. We could also have used `hicstuff rebin`, 
-which uses a slightly different syntax to perform the same operation. 
 :::
 
 ::: {.callout-tip}
-## Filtering unwanted chromosomes... 
+
+#### Filtering unwanted chromosomes... 
+
 The `<(...)` trick illustrated above allows one to easily select/remove any chromosome they want to generate a chromosome-specific `.cool` file from a `.pairs` file: 
 
 ```{sh filename="bash"}
@@ -646,6 +631,7 @@ cooler cload \
    results/matrix/CH112_noMito.cool
 cooler info results/matrix/CH112_noMito.cool
 ```
+
 :::
 
 #### `cooler zoomify` 
@@ -720,11 +706,14 @@ cooler show \
 ```
 
 ::: {.callout-tip}
-## Useful flags for cooler show
-* --balanced       If added, will plot the **normalized** contact matrix rather than the raw counts.
-* --zmin FLOAT     The minimal value of the color scale. 
-* --zmax FLOAT     The maximal value of the color scale. 
-* --cmap TEXT      The colormap used to display the contact matrix (see the full list at http://matplotlib.org/examples/color/colormaps_reference.html
+
+##### Useful flags for cooler show
+
+* `--balanced`       If added, will plot the **normalized** contact matrix rather than the raw counts.
+* `--zmin FLOAT`     The minimal value of the color scale. 
+* `--zmax FLOAT`     The maximal value of the color scale. 
+* `--cmap TEXT`      The colormap used to display the contact matrix (see the full list at http://matplotlib.org/examples/color/colormaps_reference.html
+
 :::
 
 ```{sh filename="bash"}
@@ -783,59 +772,31 @@ head results/loops/CH112.tsv
 # ------ DEFINE ENVIRONMENT VARIABLES
 PREFIX=CH112
 BINSIZE=1000
-MULTIRES="1000,2000,4000,8000,16000"
 THREADS=12
 ENZYME="DpnII,HinfI"
 GENOME="genomes/S288c/S288c.fa"
 
-# ------ Prepare output folders
-mkdir results/
-mkdir results/matrix
-mkdir results/loops
-mkdir results/pairs
-
-# ------ Fastq -> pairs
+# ------ Fastq -> mcool
 hicstuff pipeline \
-   --distance-law \
-   --duplicates \
+   --threads "${THREADS}" \
    --enzyme "${ENZYME}" \
    --filter \
-   --mapping normal \
-   --matfmt cool \
-   --no-cleanup \
-   --outdir results \
-   --plot \
+   --duplicates \
    --prefix "${PREFIX}" \
-   --threads "${THREADS}" \
+   --binning "${BINSIZE}" \
+   --plot \
+   --distance-law \
+   --outdir results \
    --genome "${GENOME}" \
    data/"${PREFIX}"_R1.fq.gz \
    data/"${PREFIX}"_R2.fq.gz
 
-mv results/tmp/*valid_idx*.pairs results/pairs/
-
-# ------ pairs -> cool
-cooler cload \
-   pairs \
-   --chrom1 2 --pos1 3 \
-   --chrom2 4 --pos2 5 \
-   <(sed 1d results/"${PREFIX}".chr.tsv | cut -f1-2):"${BINSIZE}" \
-   results/pairs/"${PREFIX}".valid_idx_pcrfree.pairs \
-   results/matrix/"${PREFIX}".cool
-
-# ------ cool -> mcool
-cooler zoomify \
-   --nproc "${THREADS}" \
-   --resolutions "${MULTIRES}" \
-   --balance \
-   --out results/matrix/"${PREFIX}".mcool \
-   results/matrix/"${PREFIX}".cool
-
-# ------ cool -> loops
+# ------ mcool -> loops
 chromosight detect \
    --pattern loops \
    --threads "${THREADS}" \
-   results/matrix/"${PREFIX}".mcool::/resolutions/"${BINSIZE}" \
-   results/loops/"${PREFIX}"
+   results/"${PREFIX}".mcool::/resolutions/"${BINSIZE}" \
+   results/"${PREFIX}"
 ```
 
 ## Going further: `cooltools`
