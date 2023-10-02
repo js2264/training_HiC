@@ -1,16 +1,15 @@
-## Installing `micromamba` 
+## 1. Installing `micromamba` 
 
 If you do not have `micromamba` already installed, run the following lines once:  
 
 ```sh
-apt update && apt install curl -y 
 "${SHELL}" <(curl -L micro.mamba.pm/install.sh)
 ## Here, press ENTER to each question
 
 source ~/.bashrc
 ```
 
-## Setting up a dedicated `micromamba` environment
+## 2. Setting up a dedicated `micromamba` environment
 
 This has to be ran just once. 
 It can be ran on a local workstation or on a HPC (e.g. `maestro`).
@@ -26,7 +25,7 @@ micromamba install -c bioconda -c conda-forge hicstuff chromosight cooltools
 hicstuff --version
 ```
 
-## Process a Hi-C library (Yeast)
+## 3. Process a Hi-C library (Yeast)
 
 ```sh
 cpu=12
